@@ -26,22 +26,96 @@ function validateSignature(body, signature) {
  * LINE返信を送信
  */
 async function replyMessage(replyToken, text) {
-    const res = await fetch(LINE_REPLY_URL, {
-        method: "POST",
-        headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${LINE_CHANNEL_ACCESS_TOKEN}`,
-        },
-        body: JSON.stringify({
-            replyToken,
-            messages: [{ type: "text", text }],
-        }),
-    });
+    try {
+        const res = await fetch(LINE_REPLY_URL, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${LINE_CHANNEL_ACCESS_TOKEN}`,
+            },
+            body: JSON.stringify({
+                replyToken,
+                messages: [{ type: "text", text }],
+            }),
+        });
 
-    if (!res.ok) {
-        const errorBody = await res.text();
-        console.error("LINE reply failed:", res.status, errorBody);
+        if (!res.ok) {
+            const errorBody = await res.text();
+            console.error("LINE reply failed:", res.status, errorBody);
+        } else {
+            console.log("LINE reply success");
+        }
+    } catch (err) {
+        console.error("LINE reply exception:", err.message);
     }
+}
+
+/**
+ * 月次集計コマンドを処理
+ */
+async function handleMonthlySummary(userId, replyToken) {
+    const month = getCurrentMonth();
+    console.log("Monthly summary for:", userId, month);
+
+    const { data, error } = await getMonthlyTransactions(userId, month);
+    if (error) {
+        console.error("DB query error:", JSON.stringify(error));
+        await replyMessage(replyToken, "⚠️ データ取得に失敗しました。");
+        return;
+    }
+
+    console.log("Transactions found:", data.length);
+    const summary = buildMonthlySummary(data, month);
+    await replyMessage(replyToken, summary);
+}
+
+/**
+ * 固定費一覧コマンドを処理
+ */
+async function handleFixedList(userId, replyToken) {
+    console.log("Fixed list for:", userId);
+
+    const { data, error } = await getFixedExpenses(userId);
+    if (error) {
+        console.error("DB query error:", JSON.stringify(error));
+        await replyMessage(replyToken, "⚠️ データ取得に失敗しました。");
+        return;
+    }
+
+    console.log("Fixed expenses found:", data.length);
+    const list = buildFixedList(data);
+    await replyMessage(replyToken, list);
+}
+
+/**
+ * 取引登録を処理
+ */
+async function handleTransaction(parsed, userId, replyToken) {
+    const type = isIncome(parsed.description) ? "income" : "expense";
+    const category = parsed.category || classifyCategory(parsed.description, type);
+    const month = getCurrentMonth();
+
+    const txData = {
+        user_id: userId,
+        month,
+        description: parsed.description,
+        amount: parsed.amount,
+        type,
+        category,
+        is_fixed: parsed.isFixed,
+    };
+
+    console.log("Inserting transaction:", JSON.stringify(txData));
+
+    const { error } = await insertTransaction(txData);
+    if (error) {
+        console.error("DB insert error:", JSON.stringify(error));
+        await replyMessage(replyToken, "⚠️ 登録に失敗しました。もう一度お試しください。");
+        return;
+    }
+
+    const msg = buildRegistrationMessage(txData);
+    await replyMessage(replyToken, msg);
 }
 
 /**
@@ -56,86 +130,59 @@ async function handleMessageEvent(event) {
     const userId = event.source.userId;
     const replyToken = event.replyToken;
 
-    // 1. コマンドチェック
-    const command = parseCommand(text);
-    if (command) {
-        if (command.type === "monthly_summary") {
-            const month = getCurrentMonth();
-            const { data, error } = await getMonthlyTransactions(userId, month);
-            if (error) {
-                console.error("DB error:", error);
-                await replyMessage(replyToken, "⚠️ データ取得に失敗しました。");
+    console.log("Received message:", JSON.stringify({ text, userId: userId?.substring(0, 8) + "..." }));
+
+    try {
+        // 1. コマンドチェック
+        const command = parseCommand(text);
+        if (command) {
+            console.log("Command detected:", command.type);
+            if (command.type === "monthly_summary") {
+                await handleMonthlySummary(userId, replyToken);
                 return;
             }
-            const summary = buildMonthlySummary(data, month);
-            await replyMessage(replyToken, summary);
+            if (command.type === "fixed_list") {
+                await handleFixedList(userId, replyToken);
+                return;
+            }
+        }
+
+        // 2. 取引入力チェック
+        const parsed = parseTransaction(text);
+        if (!parsed) {
+            await replyMessage(
+                replyToken,
+                "📝 使い方:\n\n" +
+                "【登録】\n" +
+                "ランチ 1200\n" +
+                "スーパー 4500 食費\n" +
+                "家賃 70000 固定\n\n" +
+                "【コマンド】\n" +
+                "今月 → 月次集計\n" +
+                "固定一覧 → 固定費一覧"
+            );
             return;
         }
 
-        if (command.type === "fixed_list") {
-            const { data, error } = await getFixedExpenses(userId);
-            if (error) {
-                console.error("DB error:", error);
-                await replyMessage(replyToken, "⚠️ データ取得に失敗しました。");
-                return;
-            }
-            const list = buildFixedList(data);
-            await replyMessage(replyToken, list);
-            return;
+        // 3. 取引登録
+        await handleTransaction(parsed, userId, replyToken);
+    } catch (err) {
+        console.error("handleMessageEvent error:", err.message, err.stack);
+        // エラー時もユーザーに通知を試みる
+        try {
+            await replyMessage(replyToken, "⚠️ エラーが発生しました: " + err.message);
+        } catch (replyErr) {
+            console.error("Error reply also failed:", replyErr.message);
         }
     }
-
-    // 2. 取引入力チェック
-    const parsed = parseTransaction(text);
-    if (!parsed) {
-        await replyMessage(
-            replyToken,
-            "📝 使い方:\n\n" +
-            "【登録】\n" +
-            "ランチ 1200\n" +
-            "スーパー 4500 食費\n" +
-            "家賃 70000 固定\n\n" +
-            "【コマンド】\n" +
-            "今月 → 月次集計\n" +
-            "固定一覧 → 固定費一覧"
-        );
-        return;
-    }
-
-    // 3. 収入/支出を判定
-    const type = isIncome(parsed.description) ? "income" : "expense";
-
-    // 4. カテゴリ分類（ユーザー指定があればそれを優先）
-    const category = parsed.category || classifyCategory(parsed.description, type);
-
-    // 5. DB に保存
-    const month = getCurrentMonth();
-    const txData = {
-        user_id: userId,
-        month,
-        description: parsed.description,
-        amount: parsed.amount,
-        type,
-        category,
-        is_fixed: parsed.isFixed,
-    };
-
-    const { error } = await insertTransaction(txData);
-    if (error) {
-        console.error("DB insert error:", error);
-        await replyMessage(replyToken, "⚠️ 登録に失敗しました。もう一度お試しください。");
-        return;
-    }
-
-    // 6. 登録完了を返信
-    const msg = buildRegistrationMessage(txData);
-    await replyMessage(replyToken, msg);
 }
 
 /**
  * Vercel Serverless Function エントリーポイント
  */
 module.exports = async function handler(req, res) {
+    console.log("Webhook called:", req.method);
+
     // GET はヘルスチェック / Webhook URL検証用
     if (req.method === "GET") {
         return res.status(200).json({ status: "ok" });
@@ -157,12 +204,10 @@ module.exports = async function handler(req, res) {
     const body = typeof req.body === "string" ? JSON.parse(req.body) : req.body;
     const events = body.events || [];
 
-    // 各イベントを処理
-    try {
-        await Promise.all(events.map(handleMessageEvent));
-    } catch (err) {
-        console.error("Event handling error:", err);
-    }
+    console.log("Events count:", events.length);
+
+    // 各イベントを処理（個別にtry/catchされるため、Promise.allでOK）
+    await Promise.all(events.map(handleMessageEvent));
 
     // LINE は 200 を返さないとリトライする
     return res.status(200).json({ status: "ok" });
