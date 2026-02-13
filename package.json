@@ -1,0 +1,17 @@
+{
+  "name": "line-kakeibo",
+  "version": "1.0.0",
+  "description": "LINE Messaging APIを使った個人用家計簿アプリ",
+  "private": true,
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@line/bot-sdk": "^9.6.0",
+    "@supabase/supabase-js": "^2.47.0"
+  },
+  "devDependencies": {},
+  "scripts": {
+    "test": "node test/test.js"
+  }
+}
