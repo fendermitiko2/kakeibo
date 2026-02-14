@@ -4,8 +4,8 @@
 const crypto = require("crypto");
 const { parseCommand, parseTransaction, getCurrentMonth } = require("../lib/parser");
 const { isIncome, classifyCategory } = require("../lib/category");
-const { insertTransaction, getMonthlyTransactions, getFixedExpenses } = require("../lib/db");
-const { buildMonthlySummary, buildFixedList, buildRegistrationMessage } = require("../lib/summary");
+const { insertTransaction, getMonthlyTransactions, getFixedExpenses, getAllTransactions } = require("../lib/db");
+const { buildMonthlySummary, buildFixedList, buildRegistrationMessage, buildBalanceSummary } = require("../lib/summary");
 
 const LINE_CHANNEL_SECRET = process.env.LINE_CHANNEL_SECRET || "";
 const LINE_CHANNEL_ACCESS_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN || "";
@@ -88,6 +88,24 @@ async function handleFixedList(userId, replyToken) {
 }
 
 /**
+ * 通算残高コマンドを処理
+ */
+async function handleBalance(userId, replyToken) {
+    console.log("Balance for:", userId);
+
+    const { data, error } = await getAllTransactions(userId);
+    if (error) {
+        console.error("DB query error:", JSON.stringify(error));
+        await replyMessage(replyToken, "⚠️ データ取得に失敗しました。");
+        return;
+    }
+
+    console.log("Total transactions found:", data.length);
+    const summary = buildBalanceSummary(data);
+    await replyMessage(replyToken, summary);
+}
+
+/**
  * 取引登録を処理
  */
 async function handleTransaction(parsed, userId, replyToken) {
@@ -143,6 +161,10 @@ async function handleMessageEvent(event) {
             }
             if (command.type === "fixed_list") {
                 await handleFixedList(userId, replyToken);
+                return;
+            }
+            if (command.type === "balance") {
+                await handleBalance(userId, replyToken);
                 return;
             }
         }
