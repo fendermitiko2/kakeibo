@@ -4,8 +4,8 @@
 const crypto = require("crypto");
 const { parseCommand, parseTransaction, getCurrentMonth } = require("../lib/parser");
 const { isIncome, classifyCategory } = require("../lib/category");
-const { insertTransaction, getMonthlyTransactions, getFixedExpenses, getAllTransactions } = require("../lib/db");
-const { buildMonthlySummary, buildFixedList, buildRegistrationMessage, buildBalanceSummary } = require("../lib/summary");
+const { insertTransaction, getMonthlyTransactions, getFixedExpenses, getAllTransactions, getAllExpenses } = require("../lib/db");
+const { buildMonthlySummary, buildFixedList, buildRegistrationMessage, buildBalanceSummary, buildExpenseAnalysis } = require("../lib/summary");
 
 const LINE_CHANNEL_SECRET = process.env.LINE_CHANNEL_SECRET || "";
 const LINE_CHANNEL_ACCESS_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN || "";
@@ -106,6 +106,24 @@ async function handleBalance(userId, replyToken) {
 }
 
 /**
+ * 支出分析コマンドを処理
+ */
+async function handleAnalysis(userId, replyToken) {
+    console.log("Analysis for:", userId);
+
+    const { data, error } = await getAllExpenses(userId);
+    if (error) {
+        console.error("DB query error:", JSON.stringify(error));
+        await replyMessage(replyToken, "⚠️ データ取得に失敗しました。");
+        return;
+    }
+
+    console.log("Total expenses found:", data.length);
+    const analysis = buildExpenseAnalysis(data);
+    await replyMessage(replyToken, analysis);
+}
+
+/**
  * 取引登録を処理
  */
 async function handleTransaction(parsed, userId, replyToken) {
@@ -165,6 +183,10 @@ async function handleMessageEvent(event) {
             }
             if (command.type === "balance") {
                 await handleBalance(userId, replyToken);
+                return;
+            }
+            if (command.type === "analysis") {
+                await handleAnalysis(userId, replyToken);
                 return;
             }
         }
