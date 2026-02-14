@@ -8,6 +8,10 @@
         {
             "src": "api/chart.js",
             "use": "@vercel/node"
+        },
+        {
+            "src": "api/balance-chart.js",
+            "use": "@vercel/node"
         }
     ],
     "routes": [
@@ -18,6 +22,10 @@
         {
             "src": "/api/chart",
             "dest": "/api/chart.js"
+        },
+        {
+            "src": "/api/balance-chart",
+            "dest": "/api/balance-chart.js"
         }
     ]
 }

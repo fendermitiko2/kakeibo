@@ -5,7 +5,7 @@ const crypto = require("crypto");
 const { parseCommand, parseTransaction, getCurrentMonth } = require("../lib/parser");
 const { isIncome, classifyCategory } = require("../lib/category");
 const { insertTransaction, getMonthlyTransactions, getFixedExpenses, getAllTransactions, getAllExpenses } = require("../lib/db");
-const { buildMonthlySummary, buildFixedList, buildRegistrationMessage, buildBalanceSummary, buildExpenseAnalysis, buildChartUrl } = require("../lib/summary");
+const { buildMonthlySummary, buildFixedList, buildRegistrationMessage, buildBalanceSummary, buildExpenseAnalysis, buildChartUrl, buildBalanceChartUrl } = require("../lib/summary");
 
 const LINE_CHANNEL_SECRET = process.env.LINE_CHANNEL_SECRET || "";
 const LINE_CHANNEL_ACCESS_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN || "";
@@ -132,8 +132,18 @@ async function handleBalance(userId, replyToken) {
     }
 
     console.log("Total transactions found:", data.length);
-    const summary = buildBalanceSummary(data);
-    await replyMessage(replyToken, summary);
+    const { text, monthlyBalances } = buildBalanceSummary(data);
+
+    if (monthlyBalances && monthlyBalances.length > 0) {
+        const baseUrl = getBaseUrl(currentReq);
+        const chartUrl = buildBalanceChartUrl(monthlyBalances, baseUrl);
+        await replyMessages(replyToken, [
+            { type: "text", text },
+            { type: "text", text: `📈 残高推移グラフ\n${chartUrl}` },
+        ]);
+    } else {
+        await replyMessage(replyToken, text);
+    }
 }
 
 /**
