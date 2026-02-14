@@ -4,12 +4,20 @@
         {
             "src": "api/webhook.js",
             "use": "@vercel/node"
+        },
+        {
+            "src": "api/chart.js",
+            "use": "@vercel/node"
         }
     ],
     "routes": [
         {
             "src": "/api/webhook",
             "dest": "/api/webhook.js"
+        },
+        {
+            "src": "/api/chart",
+            "dest": "/api/chart.js"
         }
     ]
 }

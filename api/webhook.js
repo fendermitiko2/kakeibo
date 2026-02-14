@@ -5,7 +5,7 @@ const crypto = require("crypto");
 const { parseCommand, parseTransaction, getCurrentMonth } = require("../lib/parser");
 const { isIncome, classifyCategory } = require("../lib/category");
 const { insertTransaction, getMonthlyTransactions, getFixedExpenses, getAllTransactions, getAllExpenses } = require("../lib/db");
-const { buildMonthlySummary, buildFixedList, buildRegistrationMessage, buildBalanceSummary, buildExpenseAnalysis } = require("../lib/summary");
+const { buildMonthlySummary, buildFixedList, buildRegistrationMessage, buildBalanceSummary, buildExpenseAnalysis, buildChartUrl } = require("../lib/summary");
 
 const LINE_CHANNEL_SECRET = process.env.LINE_CHANNEL_SECRET || "";
 const LINE_CHANNEL_ACCESS_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN || "";
@@ -23,9 +23,11 @@ function validateSignature(body, signature) {
 }
 
 /**
- * LINE返信を送信
+ * LINE返信を送信（複数メッセージ対応）
+ * @param {string} replyToken
+ * @param {Array<{ type: string, text?: string }>} messages
  */
-async function replyMessage(replyToken, text) {
+async function replyMessages(replyToken, messages) {
     try {
         const res = await fetch(LINE_REPLY_URL, {
             method: "POST",
@@ -35,7 +37,7 @@ async function replyMessage(replyToken, text) {
             },
             body: JSON.stringify({
                 replyToken,
-                messages: [{ type: "text", text }],
+                messages,
             }),
         });
 
@@ -49,6 +51,25 @@ async function replyMessage(replyToken, text) {
         console.error("LINE reply exception:", err.message);
     }
 }
+
+/**
+ * テキスト1件の返信ヘルパー
+ */
+async function replyMessage(replyToken, text) {
+    await replyMessages(replyToken, [{ type: "text", text }]);
+}
+
+/**
+ * ベースURLを取得
+ */
+function getBaseUrl(req) {
+    const host = req?.headers?.host || "localhost";
+    const proto = host.includes("localhost") ? "http" : "https";
+    return `${proto}://${host}`;
+}
+
+// リクエストオブジェクトを保持するための変数
+let currentReq = null;
 
 /**
  * 月次集計コマンドを処理
@@ -65,8 +86,18 @@ async function handleMonthlySummary(userId, replyToken) {
     }
 
     console.log("Transactions found:", data.length);
-    const summary = buildMonthlySummary(data, month);
-    await replyMessage(replyToken, summary);
+    const { text, categoryData } = buildMonthlySummary(data, month);
+
+    if (categoryData) {
+        const baseUrl = getBaseUrl(currentReq);
+        const chartUrl = buildChartUrl(categoryData, `${month} カテゴリ別支出`, baseUrl);
+        await replyMessages(replyToken, [
+            { type: "text", text },
+            { type: "text", text: `📈 グラフで見る\n${chartUrl}` },
+        ]);
+    } else {
+        await replyMessage(replyToken, text);
+    }
 }
 
 /**
@@ -119,8 +150,18 @@ async function handleAnalysis(userId, replyToken) {
     }
 
     console.log("Total expenses found:", data.length);
-    const analysis = buildExpenseAnalysis(data);
-    await replyMessage(replyToken, analysis);
+    const { text, categoryData } = buildExpenseAnalysis(data);
+
+    if (categoryData) {
+        const baseUrl = getBaseUrl(currentReq);
+        const chartUrl = buildChartUrl(categoryData, "支出分析（通算）", baseUrl);
+        await replyMessages(replyToken, [
+            { type: "text", text },
+            { type: "text", text: `📈 グラフで見る\n${chartUrl}` },
+        ]);
+    } else {
+        await replyMessage(replyToken, text);
+    }
 }
 
 /**
@@ -203,6 +244,8 @@ async function handleMessageEvent(event) {
                 "家賃 70000 固定\n\n" +
                 "【コマンド】\n" +
                 "今月 → 月次集計\n" +
+                "残高 → 通算残高\n" +
+                "分析 → 支出分析\n" +
                 "固定一覧 → 固定費一覧"
             );
             return;
@@ -212,7 +255,6 @@ async function handleMessageEvent(event) {
         await handleTransaction(parsed, userId, replyToken);
     } catch (err) {
         console.error("handleMessageEvent error:", err.message, err.stack);
-        // エラー時もユーザーに通知を試みる
         try {
             await replyMessage(replyToken, "⚠️ エラーが発生しました: " + err.message);
         } catch (replyErr) {
@@ -226,6 +268,9 @@ async function handleMessageEvent(event) {
  */
 module.exports = async function handler(req, res) {
     console.log("Webhook called:", req.method);
+
+    // リクエストオブジェクトを保持（ベースURL取得用）
+    currentReq = req;
 
     // GET はヘルスチェック / Webhook URL検証用
     if (req.method === "GET") {
@@ -250,7 +295,7 @@ module.exports = async function handler(req, res) {
 
     console.log("Events count:", events.length);
 
-    // 各イベントを処理（個別にtry/catchされるため、Promise.allでOK）
+    // 各イベントを処理
     await Promise.all(events.map(handleMessageEvent));
 
     // LINE は 200 を返さないとリトライする
